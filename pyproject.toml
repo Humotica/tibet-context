@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tibet-context"
-version = "0.1.0"
+version = "0.2.0"
 description = "Layered context container with TIBET provenance and JIS capability gating"
 readme = "README.md"
 license = {text = "MIT"}
@@ -34,6 +34,7 @@ dependencies = ["tibet-core>=0.3.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+llm = ["requests>=2.28"]
 
 [project.scripts]
 tibet-context = "tibet_context.__main__:main"

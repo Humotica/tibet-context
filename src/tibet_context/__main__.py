@@ -34,6 +34,15 @@ def main():
     profile_parser = sub.add_parser("profile", help="Show or load a capability profile")
     profile_parser.add_argument("--file", default=None, help="Path to profile .toml/.json")
 
+    # v0.2.0: Carbonara flow commands
+    carb_mock = sub.add_parser("carbonara-mock", help="Run carbonara flow in mock mode (no LLM)")
+    carb_mock.add_argument("--question", default="Hoe maak ik pasta carbonara?", help="Question to ask")
+
+    carb_live = sub.add_parser("carbonara-live", help="Run carbonara flow with real LLM backends")
+    carb_live.add_argument("--question", default="Hoe maak ik pasta carbonara?", help="Question to ask")
+    carb_live.add_argument("--small", default=None, help="Small model (default: qwen2.5:3b via Ollama)")
+    carb_live.add_argument("--big", default=None, help="Big model (default: Gemini 2.0 Flash)")
+
     args = parser.parse_args()
 
     if args.version:
@@ -49,6 +58,10 @@ def main():
         _read_file(args.file, args.model, args.capability)
     elif args.command == "profile":
         _show_profile(args.file)
+    elif args.command == "carbonara-mock":
+        _run_carbonara_mock(args.question)
+    elif args.command == "carbonara-live":
+        _run_carbonara_live(args.question, args.small, args.big)
     else:
         parser.print_help()
 
@@ -163,6 +176,39 @@ def _show_profile(file_path: str | None):
     print("Layers:")
     for level, spec in sorted(profile.layers.items()):
         print(f"  L{level}: min_capability={spec.min_capability}B, max_tokens={spec.max_tokens}")
+
+
+def _run_carbonara_mock(question: str):
+    from .integration.carbonara import run_carbonara_mock, print_result
+    print("Running carbonara flow in MOCK mode (no LLM needed)...\n")
+    result = run_carbonara_mock(question=question)
+    print_result(result)
+
+
+def _run_carbonara_live(question: str, small: str | None, big: str | None):
+    from .integration.carbonara import run_carbonara_live, print_result
+    from .integration.llm import OllamaBackend, GeminiBackend
+
+    small_backend = OllamaBackend(model=small) if small else None
+    big_backend = None
+    if big:
+        if big.startswith("gemini"):
+            big_backend = GeminiBackend(model=big)
+        else:
+            big_backend = OllamaBackend(model=big)
+
+    print("Running carbonara flow in LIVE mode...\n")
+    try:
+        result = run_carbonara_live(
+            question=question,
+            small_backend=small_backend,
+            big_backend=big_backend,
+        )
+        print_result(result)
+    except ConnectionError as e:
+        print(f"Connection error: {e}")
+        print("Make sure Ollama is running on the P520 and/or GOOGLE_API_KEY is set.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

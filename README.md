@@ -46,6 +46,11 @@ pip install tibet-context
 
 Requires Python 3.10+ and [tibet-core](https://pypi.org/project/tibet-core/) >= 0.3.0 (installed automatically). Zero other dependencies.
 
+For LLM backend support (Ollama, Gemini API):
+```bash
+pip install tibet-context[llm]
+```
+
 ## Quick Start
 
 ```python
@@ -76,7 +81,7 @@ gate.carbonara_test("qwen2.5:32b")  # True
 
 The core protocol: layered containers, capability gating, binary serialization, and TIBET provenance. Everything needed to prove the concept works.
 
-### Modules
+### Core Modules
 
 | Module | Purpose |
 |--------|---------|
@@ -114,12 +119,8 @@ Create your own profile for any model family:
 
 ```python
 from tibet_context import CapabilityProfile
-
-# Load from file
-profile = CapabilityProfile.from_file("my-profile.toml")
-
-# Or build programmatically
 from tibet_context.layers import LayerSpec
+
 profile = CapabilityProfile(name="llama", layers={
     0: LayerSpec(level=0, min_capability=1, max_tokens=512),
     1: LayerSpec(level=1, min_capability=8, max_tokens=4096),
@@ -134,10 +135,7 @@ Compact binary format for efficient storage and transport:
 ```python
 from tibet_context import serializer
 
-# Write
 serializer.to_tctx_file(container, "context.tctx")
-
-# Read
 restored = serializer.from_tctx_file("context.tctx")
 assert restored.verify_integrity()
 ```
@@ -150,33 +148,159 @@ The "zakjapanner" problem: a small model that gives superficially correct but ac
 
 ```python
 gate = CapabilityGate()
-
-# Small model: can only see the summary
 gate.carbonara_test("qwen2.5:3b")   # False — needs escalation
-gate.carbonara_test("qwen2.5:7b")   # False
-
-# Large model: can see deep context with the real technique
-gate.carbonara_test("qwen2.5:32b")  # True — can handle it
-gate.carbonara_test("qwen2.5:72b")  # True
+gate.carbonara_test("qwen2.5:32b")  # True — can handle deep context
 ```
 
-### CLI
+## v0.2.0 — Integration Layer
+
+Connects the protocol with the real world: KmBiT orchestration, OomLlama memory, and LLM backends.
+
+### Integration Modules
+
+| Module | Purpose |
+|--------|---------|
+| `integration/provider.py` | `ContextProvider` — tibet-core Provider integration with full TIBET tracking |
+| `integration/kmbit.py` | `KmBiTBridge` — KmBiT Overseer hooks for intent routing + escalation |
+| `integration/oomllama.py` | `OomLlamaBridge` — reads conversation history from OomLlama's SQLite memory |
+| `integration/llm.py` | `OllamaBackend`, `GeminiBackend` — LLM backend abstraction |
+| `integration/carbonara.py` | End-to-end carbonara demo flow (mock + live modes) |
+
+### KmBiT Escalation Flow
+
+The bridge hooks into the KmBiT Overseer's intent routing pipeline:
+
+```python
+from tibet_context.integration import KmBiTBridge
+
+bridge = KmBiTBridge()
+
+# 1. KmBiT classifies intent -> routes to model
+container = bridge.on_request(
+    text="Hoe maak ik pasta carbonara?",
+    intent="simple",
+    model_id="qwen2.5:3b",
+)
+
+# 2. Small model fails quality check -> escalate
+result = bridge.on_escalation(
+    from_model="qwen2.5:3b",
+    to_model="qwen2.5:32b",
+    reason="Carbonara test FAIL",
+    conversation=[...],
+    failed_response="Kook pasta, doe ei erop.",
+)
+
+# 3. Big model gets full context package
+print(result.context_for_model)  # L0 + L1 + L2 with escalation context
+```
+
+### OomLlama Memory Bridge
+
+Reads directly from OomLlama's SQLite conversation database:
+
+```python
+from tibet_context.integration import OomLlamaBridge
+
+bridge = OomLlamaBridge(db_path="/srv/jtel-stack/data/chimera_memory.db")
+
+# List conversations
+convs = bridge.list_conversations(idd_name="kit")
+
+# Build context container from conversation history
+container = bridge.from_conversation_memory("conv-001")
+
+# Inject as prompt context for a model
+context_str = bridge.inject_context(container, "qwen2.5:32b")
+```
+
+### LLM Backends
+
+Unified interface for Ollama (local P520) and Gemini API:
+
+```python
+from tibet_context.integration.llm import OllamaBackend, GeminiBackend
+
+# Local Ollama (P520 GPU)
+small = OllamaBackend(model="qwen2.5:3b", host="http://192.168.4.85:11434")
+response = small.generate("Hoe maak ik carbonara?", temperature=0.3)
+
+# Google Gemini API
+big = GeminiBackend(model="gemini-2.0-flash")  # uses GOOGLE_API_KEY env
+response = big.generate("Explain carbonara properly", max_tokens=500)
+```
+
+### Carbonara Demo
+
+Full end-to-end flow showing the escalation pipeline:
+
+```python
+from tibet_context.integration.carbonara import run_carbonara_mock, print_result
+
+# Mock mode (no LLM needed — perfect for testing)
+result = run_carbonara_mock()
+print_result(result)
+
+# Live mode (requires Ollama on P520 + Gemini API key)
+from tibet_context.integration.carbonara import run_carbonara_live
+result = run_carbonara_live()
+print_result(result)
+```
+
+The flow:
+1. User asks "Hoe maak ik pasta carbonara?"
+2. KmBiT classifies intent -> routes to Qwen 3B (small, fast)
+3. Qwen 3B answers with L0 context only -> "Kook pasta, doe ei erop"
+4. Quality check **FAILS** (carbonara test — rauw ei op bord!)
+5. KmBiT escalates to big model with full context package
+6. Big model answers with L0+L1+L2 -> proper carbonara recipe
+7. Quality check **PASSES**
+8. TIBET chain records the complete provenance trail
+
+### CLI (v0.2.0)
 
 ```bash
-# Version
+# Core commands (v0.1.0)
 python -m tibet_context --version
-
-# Package info + default profile
 python -m tibet_context info
-
-# Run the carbonara demo
 python -m tibet_context demo
-
-# Read a container file
 python -m tibet_context read context.tctx --model qwen2.5:32b
-
-# Show a capability profile
 python -m tibet_context profile --file my-profile.toml
+
+# Integration commands (v0.2.0)
+python -m tibet_context carbonara-mock
+python -m tibet_context carbonara-mock --question "Hoe maak ik risotto?"
+python -m tibet_context carbonara-live
+python -m tibet_context carbonara-live --small qwen2.5:7b --big gemini-2.0-flash
+```
+
+## ContextProvider — One-Stop Integration
+
+The `ContextProvider` wraps everything into a single entry point:
+
+```python
+from tibet_context.integration import ContextProvider
+
+cp = ContextProvider(actor="my-app")
+
+# Build from conversation
+container = cp.build_from_conversation(
+    messages=[{"role": "user", "content": "Carbonara?"}],
+    deep_context="Guanciale, pecorino, tempering...",
+)
+
+# Gate check
+report = cp.gate_check(container, "qwen2.5:3b")
+# {"capability": 3, "max_level": 0, "carbonara_pass": False, ...}
+
+# Escalate
+result = cp.escalate(container, "qwen2.5:3b", "qwen2.5:32b", "Quality fail")
+
+# Record completion with TIBET provenance
+cp.record_completion(container, "qwen2.5:32b", "Proper answer", quality_pass=True)
+
+# Export full TIBET chain
+chain = cp.export_chain(format="dict")
 ```
 
 ## Relation to TIBET Ecosystem
@@ -187,16 +311,24 @@ tibet-core (Token, Chain, Provider, FileStore)
 tibet-context (Container, Layers, Gate, Builder)
     │ feeds context to           │ hooks into
 OomLlama (.oom chunks)     KmBiT (orchestration)
-    │ runs on
-P520 GPU (Qwen 3B/7B/32B)
+    │ runs on                    │ routes to
+P520 GPU (Qwen 3B/7B/32B)  Gemini API (Flash)
 ```
 
 tibet-context is the **glue** between audit (tibet) and AI (oomllama/kmbit). It transforms audit trail into actionable context.
 
-## Roadmap
+## Tests
 
-- **v0.1.0** — Core Engine *(current)* — protocol + gating + serialization
-- **v0.2.0** — Integration Layer — KmBiT orchestration, OomLlama memory bridge, tibet-core Provider hooks
+```bash
+# Run all 126 tests
+pytest tests/ -v
+
+# Core engine only (88 tests)
+pytest tests/ -v --ignore=tests/test_integration.py
+
+# Integration layer only (38 tests)
+pytest tests/test_integration.py -v
+```
 
 ## License
 
