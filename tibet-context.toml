@@ -1,0 +1,17 @@
+# tibet-context.toml — Default Qwen capability profile
+# Customize thresholds for your model lineup
+
+[profile]
+name = "qwen"
+
+[profile.layers.0]
+min_capability = 3    # Qwen 3B can read L0 (summary)
+max_tokens = 512
+
+[profile.layers.1]
+min_capability = 14   # Qwen 14B for L1 (conversation)
+max_tokens = 4096
+
+[profile.layers.2]
+min_capability = 32   # Qwen 32B for L2 (deep context)
+max_tokens = 16384
